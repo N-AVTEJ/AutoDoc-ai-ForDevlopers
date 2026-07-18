@@ -1,0 +1,22 @@
+{
+  "name": "docdrift-ai",
+  "version": "0.1.0",
+  "description": "AI-powered documentation generator with doc-drift detection",
+  "main": "api/generate.js",
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "keywords": [
+    "documentation",
+    "ai",
+    "drift-detection",
+    "github",
+    "vercel"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@vercel/kv": "^1.0.1",
+    "vercel": "^37.0.0"
+  }
+}
