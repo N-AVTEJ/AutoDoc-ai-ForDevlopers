@@ -3,21 +3,34 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DocDrift AI - Smart Code Documentation & Drift Detection</title>
+  <title>DocDrift AI - AI-powered Code Documentation Generator</title>
   <link rel="stylesheet" href="styles.css">
-  <script defer src="app.js"></script>
+  <script type="module" src="app.js" defer></script>
 </head>
 <body>
-  <div id="app">
-    <header>
+  <header class="app-header">
+    <a href="index.html" class="brand">
       <h1>DocDrift AI</h1>
-      <p>AI-powered code documentation generator with doc-drift detection</p>
-    </header>
-    <main>
-      <section id="status">
-        <p>Loading DocDrift AI...</p>
-      </section>
-    </main>
-  </div>
+      <span class="logo-tag">Beta</span>
+    </a>
+  </header>
+
+  <main class="container">
+    <section class="hero-section">
+      <h2>Stop Documentation Drift.</h2>
+      <p>Analyze your GitHub repositories, detect out-of-date documentation, and generate highly precise JSDoc/docstrings automatically using AI.</p>
+      
+      <form id="landing-form" class="input-group">
+        <input 
+          type="text" 
+          id="repo-url-input" 
+          placeholder="Enter GitHub Repository URL (e.g. github.com/owner/repo)" 
+          required
+        >
+        <button type="submit" class="btn">Analyze Repo</button>
+      </form>
+      <div id="error-message" style="color: #ef4444; margin-top: 1rem; font-size: 0.9rem; display: none;"></div>
+    </section>
+  </main>
 </body>
 </html>

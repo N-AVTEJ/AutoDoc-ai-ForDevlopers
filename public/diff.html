@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DocDrift AI - Document Diff View</title>
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.js" defer></script>
+</head>
+<body>
+  <header class="app-header">
+    <a href="index.html" class="brand">
+      <h1>DocDrift AI</h1>
+      <span class="logo-tag">Beta</span>
+    </a>
+    <div id="repo-display" class="repo-badge">Loading Repository...</div>
+  </header>
+
+  <main class="container">
+    <!-- Back Navigation -->
+    <div style="margin-bottom: 1.5rem;">
+      <a href="explorer.html" class="btn btn-secondary">&larr; Back to Explorer</a>
+    </div>
+
+    <!-- Active Diff View Card -->
+    <div id="diff-card" class="diff-container" style="display: none;">
+      <div class="diff-header">
+        <div id="file-title" class="diff-title">loading/file/path.js</div>
+        <div class="diff-actions">
+          <button id="copy-btn" class="btn">Copy Documentation</button>
+          <button id="download-btn" class="btn btn-secondary">Download Code</button>
+        </div>
+      </div>
+      <!-- Rendered line-by-line diff lines will be appended here -->
+      <div id="diff-viewer" class="diff-viewer"></div>
+    </div>
+
+    <!-- Empty/Error State -->
+    <div id="diff-empty-state" class="empty-state" style="display: none;">
+      <h3>No File Selected</h3>
+      <p>No document comparison was selected. Please go back to the explorer to select a file.</p>
+      <a href="explorer.html" class="btn">Go to Explorer</a>
+    </div>
+  </main>
+</body>
+</html>

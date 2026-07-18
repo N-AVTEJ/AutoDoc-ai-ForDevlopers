@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DocDrift AI - File Explorer</title>
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.js" defer></script>
+</head>
+<body>
+  <header class="app-header">
+    <a href="index.html" class="brand">
+      <h1>DocDrift AI</h1>
+      <span class="logo-tag">Beta</span>
+    </a>
+    <div id="repo-display" class="repo-badge">Loading Repository...</div>
+  </header>
+
+  <main class="container">
+    <div class="explorer-header">
+      <h2>Documentation Status</h2>
+      <div>
+        <button id="generate-all-btn" class="btn">Generate All Docs</button>
+        <button id="reset-btn" class="btn btn-secondary">Reset State</button>
+      </div>
+    </div>
+
+    <!-- Main split layout -->
+    <div class="split-layout">
+      <!-- Left pane: Undocumented files -->
+      <section class="pane-card">
+        <div class="pane-title">
+          <span>Undocumented Files</span>
+          <span id="undocumented-count" class="badge badge-undocumented">0</span>
+        </div>
+        <ul id="undocumented-list" class="file-list">
+          <!-- Populated by JavaScript -->
+        </ul>
+        <div id="undocumented-empty" class="empty-state" style="display: none;">
+          <p>🎉 All files have been documented!</p>
+        </div>
+      </section>
+
+      <!-- Right pane: Documented files -->
+      <section class="pane-card">
+        <div class="pane-title">
+          <span>Documented Files</span>
+          <span id="documented-count" class="badge badge-documented">0</span>
+        </div>
+        <ul id="documented-list" class="file-list">
+          <!-- Populated by JavaScript -->
+        </ul>
+        <div id="documented-empty" class="empty-state" style="display: none;">
+          <p>No documented files yet. Click "Generate" to start documenting your codebase.</p>
+        </div>
+      </section>
+    </div>
+
+    <!-- Overall Empty State (no repository selected) -->
+    <div id="global-empty-state" class="empty-state" style="display: none; margin-top: 5rem;">
+      <h3>No Repository Loaded</h3>
+      <p>Please enter a GitHub repository URL on the home page to begin analyzing.</p>
+      <a href="index.html" class="btn">Go to Home</a>
+    </div>
+  </main>
+</body>
+</html>
