@@ -33,28 +33,44 @@ export default async function handler(req, res) {
     const { owner, repo } = parseGitHubUrl(repoUrl);
 
     // 2. Fetch repository metadata (specifically default branch)
-    let details;
+    let defaultBranch = 'main';
     try {
-      details = await fetchRepoDetails(owner, repo, githubToken);
+      const details = await fetchRepoDetails(owner, repo, githubToken);
+      defaultBranch = details.defaultBranch || 'main';
     } catch (error) {
+      console.warn('Could not dynamically fetch repository details, using "main" as initial default branch:', error.message);
+      // If rate limited or private repo check fails here, pass error unless it is a generic failure
       if (error instanceof RateLimitError) {
         return res.status(403).json({
           error: 'GitHub API rate limit reached, try again later or add a personal access token (githubToken)'
         });
       }
-      if (error instanceof GitHubAPIError) {
-        if (error.status === 404) {
-          return res.status(404).json({ error: `Repository not found: ${owner}/${repo}` });
-        }
-        return res.status(error.status).json({ error: error.message });
+      if (error instanceof GitHubAPIError && error.status === 404) {
+        return res.status(404).json({ error: `Repository not found: ${owner}/${repo}` });
       }
-      throw error;
     }
 
-    const { defaultBranch } = details;
-
-    // 3. Fetch file tree
-    const tree = await fetchFileTree(owner, repo, defaultBranch, githubToken);
+    // 3. Fetch file tree with fallback support
+    let tree;
+    let activeBranch = defaultBranch;
+    try {
+      tree = await fetchFileTree(owner, repo, activeBranch, githubToken);
+    } catch (error) {
+      // If we tried detected default branch (or main) and got 404, try master as fallback
+      if (error instanceof GitHubAPIError && error.status === 404 && activeBranch !== 'master') {
+        activeBranch = 'master';
+        try {
+          tree = await fetchFileTree(owner, repo, activeBranch, githubToken);
+        } catch (fallbackError) {
+          if (fallbackError instanceof GitHubAPIError && fallbackError.status === 404) {
+            return res.status(404).json({ error: `Repository branch not found: verified default branch and "master" both returned 404` });
+          }
+          throw fallbackError;
+        }
+      } else {
+        throw error;
+      }
+    }
 
     // 4. Filter tree to allowed code files
     const filteredFiles = tree.filter(item => 
@@ -66,7 +82,7 @@ export default async function handler(req, res) {
     const files = await Promise.all(
       filteredFiles.map(async (file) => {
         try {
-          const content = await fetchFileContent(owner, repo, defaultBranch, file.path, githubToken);
+          const content = await fetchFileContent(owner, repo, activeBranch, file.path, githubToken);
           return {
             path: file.path,
             size: file.size,
@@ -87,7 +103,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       owner,
       repo,
-      defaultBranch,
+      defaultBranch: activeBranch,
       files,
       fileCount: files.length
     });
