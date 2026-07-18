@@ -16,7 +16,7 @@ npm install
 ### Running Locally
 To run the full stack locally (including Vercel Serverless API Functions and the static frontend):
 ```bash
-npm run dev
+npm run vercel-dev
 ```
 This will start the Vercel development server, typically available at `http://localhost:3000`.
 

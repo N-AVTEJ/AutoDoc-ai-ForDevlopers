@@ -5,7 +5,7 @@
   "main": "api/generate.js",
   "type": "module",
   "scripts": {
-    "dev": "vercel dev"
+    "vercel-dev": "vercel dev"
   },
   "keywords": [
     "documentation",
