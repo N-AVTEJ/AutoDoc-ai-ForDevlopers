@@ -1,292 +1,355 @@
-import {
-  getStoredState,
-  saveState,
-  initializeWithRepo,
-  updateFileStatus,
-  clearStoredState,
-  setSelectedFileForDiff,
-  getSelectedFileForDiff
-} from './js/state.js';
+// AutoDoc AI SPA Client Orchestrator
 
-import { computeDiff } from './js/diff-engine.js';
+// In-Memory Custom API Keys (retains security by not saving to localStorage)
+const customApiKeys = {
+  gemini: '',
+  openai: '',
+  anthropic: ''
+};
+
+// Global SPA State
+let currentFilename = 'before.py';
+let freeDocsRemaining = 3;
 
 document.addEventListener('DOMContentLoaded', () => {
-  const path = window.location.pathname.toLowerCase();
+  // UI Elements
+  const githubInput = document.getElementById('github-url-input');
+  const fetchBtn = document.getElementById('fetch-btn');
+  const beforeTextarea = document.getElementById('before-textarea');
+  const charCounter = document.getElementById('char-counter');
+  
+  const languageSelect = document.getElementById('language-select');
+  const formatSelect = document.getElementById('format-select');
+  const modelSelect = document.getElementById('model-select');
+  const generateBtn = document.getElementById('generate-btn');
+  
+  const leftFilename = document.getElementById('left-filename');
+  const rightFilename = document.getElementById('right-filename');
+  
+  const afterEmpty = document.getElementById('after-empty');
+  const afterCode = document.getElementById('after-code');
+  const documentedBadge = document.getElementById('documented-badge');
+  const copyBtn = document.getElementById('copy-btn');
+  
+  const historyToggleBtn = document.getElementById('history-toggle-btn');
+  const historyBadge = document.getElementById('history-badge');
+  const historyDropdown = document.getElementById('history-dropdown');
+  const historyList = document.getElementById('history-list');
+  
+  const keyIndicatorBtn = document.getElementById('key-indicator-btn');
+  const keyStatusText = document.getElementById('key-status-text');
+  const keyModal = document.getElementById('key-modal');
+  const modalProviderSelect = document.getElementById('modal-provider-select');
+  const modalKeyInput = document.getElementById('modal-key-input');
+  const modalCancelBtn = document.getElementById('modal-cancel-btn');
+  const modalSaveBtn = document.getElementById('modal-save-btn');
+  
+  const statusMessage = document.getElementById('status-message');
 
-  if (path.endsWith('index.html') || path === '/' || path.endsWith('/') || path.includes('index')) {
-    initLandingPage();
-  } else if (path.includes('explorer')) {
-    initExplorerPage();
-  } else if (path.includes('diff')) {
-    initDiffPage();
+  // Initialize UI
+  updateCharCounter();
+  renderHistory();
+  updateFreeCounter(freeDocsRemaining);
+
+  // ==========================================
+  // 1. Live Character Count
+  // ==========================================
+  beforeTextarea.addEventListener('input', updateCharCounter);
+
+  function updateCharCounter() {
+    const len = beforeTextarea.value.length;
+    charCounter.textContent = `${len.toLocaleString()} / 50,000 characters`;
   }
-});
 
-// ==========================================
-// 1. Landing Page Controller
-// ==========================================
-function initLandingPage() {
-  const form = document.getElementById('landing-form');
-  const input = document.getElementById('repo-url-input');
-  const errorMsg = document.getElementById('error-message');
-
-  form.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const repoUrl = input.value.trim();
-
-    // Simple GitHub validation check
-    const isGitHub = /^(https?:\/\/)?(www\.)?github\.com\/[^\/]+\/[^\/]+/.test(repoUrl) || 
-                     /^github\.com\/[^\/]+\/[^\/]+/.test(repoUrl);
-
-    if (!isGitHub) {
-      errorMsg.textContent = 'Please enter a valid GitHub repository URL (e.g. github.com/owner/repo)';
-      errorMsg.style.display = 'block';
+  // ==========================================
+  // 2. Fetch Single File from GitHub
+  // ==========================================
+  fetchBtn.addEventListener('click', async () => {
+    const url = githubInput.value.trim();
+    if (!url) {
+      alert('Please enter a GitHub file URL first.');
       return;
     }
 
-    errorMsg.style.display = 'none';
-    initializeWithRepo(repoUrl);
-    window.location.href = 'explorer.html';
-  });
-}
+    fetchBtn.disabled = true;
+    const originalText = fetchBtn.innerHTML;
+    fetchBtn.textContent = 'Fetching...';
 
-// ==========================================
-// 2. Explorer Page Controller
-// ==========================================
-function initExplorerPage() {
-  const state = getStoredState();
+    try {
+      const response = await fetch('/api/github-fetch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoUrl: url })
+      });
 
-  const repoDisplay = document.getElementById('repo-display');
-  const globalEmpty = document.getElementById('global-empty-state');
-  const undocumentedList = document.getElementById('undocumented-list');
-  const documentedList = document.getElementById('documented-list');
-  const undocumentedEmpty = document.getElementById('undocumented-empty');
-  const documentedEmpty = document.getElementById('documented-empty');
-  const undocumentedCount = document.getElementById('undocumented-count');
-  const documentedCount = document.getElementById('documented-count');
-  const generateAllBtn = document.getElementById('generate-all-btn');
-  const resetBtn = document.getElementById('reset-btn');
+      const data = await response.json();
 
-  if (!state) {
-    // Hide active components and show empty state
-    document.querySelector('.explorer-header').style.display = 'none';
-    document.querySelector('.split-layout').style.display = 'none';
-    globalEmpty.style.display = 'block';
-    if (repoDisplay) repoDisplay.textContent = 'No repository loaded';
-    return;
-  }
-
-  // Update repository header
-  repoDisplay.textContent = `${state.repo.owner}/${state.repo.repo} [${state.repo.defaultBranch}]`;
-
-  // Render file listings
-  renderLists();
-
-  // Reset button
-  resetBtn.addEventListener('click', () => {
-    clearStoredState();
-    window.location.href = 'index.html';
-  });
-
-  // Generate All button
-  generateAllBtn.addEventListener('click', async () => {
-    const undocumentedFiles = state.files.filter(f => f.status === 'undocumented');
-    if (undocumentedFiles.length === 0) return;
-
-    generateAllBtn.disabled = true;
-    generateAllBtn.textContent = 'Generating...';
-
-    // Stagger doc generation simulation
-    for (let i = 0; i < undocumentedFiles.length; i++) {
-      const file = undocumentedFiles[i];
-      await simulateGeneration(file.path);
-    }
-
-    generateAllBtn.disabled = false;
-    generateAllBtn.textContent = 'Generate All Docs';
-  });
-
-  /**
-   * Renders Undocumented and Documented file listings from local storage state.
-   */
-  function renderLists() {
-    const currentState = getStoredState();
-    if (!currentState) return;
-
-    undocumentedList.innerHTML = '';
-    documentedList.innerHTML = '';
-
-    const undocumentedFiles = currentState.files.filter(f => f.status === 'undocumented' || f.status === 'generating');
-    const documentedFiles = currentState.files.filter(f => f.status === 'documented');
-
-    undocumentedCount.textContent = undocumentedFiles.length;
-    documentedCount.textContent = documentedFiles.length;
-
-    // Show/hide empty list wrappers
-    undocumentedEmpty.style.display = undocumentedFiles.length === 0 ? 'block' : 'none';
-    documentedEmpty.style.display = documentedFiles.length === 0 ? 'block' : 'none';
-
-    // Disable "Generate All" if nothing is undocumented
-    generateAllBtn.disabled = currentState.files.filter(f => f.status === 'undocumented').length === 0;
-
-    // Render Undocumented
-    undocumentedFiles.forEach(file => {
-      const li = document.createElement('li');
-      li.className = 'file-row';
-
-      const isGenerating = file.status === 'generating';
-
-      li.innerHTML = `
-        <div class="file-info">
-          <span class="file-path">${file.path}</span>
-          <span class="file-meta">${file.size} bytes</span>
-        </div>
-        ${isGenerating 
-          ? `<span class="spinner"></span>` 
-          : `<button class="btn btn-secondary btn-sm generate-file-btn" data-path="${file.path}">Generate</button>`
-        }
-      `;
-
-      if (!isGenerating) {
-        li.querySelector('.generate-file-btn').addEventListener('click', () => {
-          simulateGeneration(file.path);
-        });
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to fetch file content');
       }
 
-      undocumentedList.appendChild(li);
-    });
+      if (data.isSingleFile) {
+        beforeTextarea.value = data.content;
+        updateCharCounter();
+        
+        // Extract filename and determine language
+        const parts = data.path.split('/');
+        const name = parts[parts.length - 1];
+        currentFilename = name;
+        
+        leftFilename.textContent = name;
+        rightFilename.textContent = `documented_${name}`;
+        
+        // Auto-select language from file extension
+        const ext = name.split('.').pop().toLowerCase();
+        const extensionMap = {
+          'py': 'Python',
+          'js': 'JavaScript',
+          'jsx': 'JavaScript',
+          'ts': 'TypeScript',
+          'tsx': 'TypeScript',
+          'go': 'Go',
+          'java': 'Java',
+          'cpp': 'C++',
+          'h': 'C++',
+          'html': 'HTML/CSS',
+          'css': 'HTML/CSS'
+        };
+        if (extensionMap[ext]) {
+          languageSelect.value = extensionMap[ext];
+        }
+      } else {
+        alert(`Fetched repo tree successfully, but please supply a single file blob URL (containing /blob/) to pull its code contents.`);
+      }
+    } catch (err) {
+      alert(`Error: ${err.message}`);
+    } finally {
+      fetchBtn.disabled = false;
+      fetchBtn.innerHTML = originalText;
+    }
+  });
 
-    // Render Documented
-    documentedFiles.forEach(file => {
-      const li = document.createElement('li');
-      li.className = 'file-row row-clickable';
+  // ==========================================
+  // 3. Generate Docs & Analyze
+  // ==========================================
+  generateBtn.addEventListener('click', async () => {
+    const code = beforeTextarea.value.trim();
+    if (!code) {
+      alert('Please paste some code or fetch a file from GitHub first.');
+      return;
+    }
 
-      li.innerHTML = `
-        <div class="file-info">
-          <span class="file-path">${file.path}</span>
-          <span class="file-meta">${file.size} bytes</span>
-        </div>
-        <span class="badge badge-documented">Documented</span>
-      `;
+    const language = languageSelect.value;
+    const outputFormat = formatSelect.value;
+    const model = modelSelect.value;
 
-      li.addEventListener('click', () => {
-        setSelectedFileForDiff(file.path);
-        window.location.href = 'diff.html';
+    // Get matching custom key from memory
+    const provider = getProviderFromModel(model);
+    const customApiKey = customApiKeys[provider];
+
+    generateBtn.disabled = true;
+    const originalText = generateBtn.innerHTML;
+    generateBtn.textContent = 'Generating...';
+
+    try {
+      const response = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code,
+          language,
+          outputFormat,
+          model,
+          customApiKey
+        })
       });
 
-      documentedList.appendChild(li);
-    });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Documentation generation failed');
+      }
+
+      // Populate output panel
+      afterEmpty.style.display = 'none';
+      afterCode.textContent = data.documentedCode;
+      afterCode.style.display = 'block';
+      documentedBadge.style.display = 'inline-block';
+      copyBtn.style.display = 'inline-block';
+
+      // Update free limit status
+      if (data.remainingFree !== undefined && data.remainingFree !== null) {
+        freeDocsRemaining = data.remainingFree;
+        updateFreeCounter(freeDocsRemaining);
+      }
+
+      // Add to Session History
+      saveToHistory({
+        filename: currentFilename,
+        language,
+        format: outputFormat,
+        model,
+        originalContent: code,
+        documentedContent: data.documentedCode
+      });
+
+    } catch (err) {
+      alert(`Error: ${err.message}`);
+    } finally {
+      generateBtn.disabled = false;
+      generateBtn.innerHTML = originalText;
+    }
+  });
+
+  function getProviderFromModel(model) {
+    if (model.includes('openai') || model.includes('gpt')) return 'openai';
+    if (model.includes('anthropic') || model.includes('claude')) return 'anthropic';
+    return 'gemini';
   }
 
-  /**
-   * Simulates documentation generation delay and re-renders lists.
-   * @param {string} path - File path to generate docs for.
-   */
-  function simulateGeneration(path) {
-    return new Promise((resolve) => {
-      updateFileStatus(path, 'generating');
-      renderLists();
-
-      setTimeout(() => {
-        updateFileStatus(path, 'documented');
-        renderLists();
-        resolve();
-      }, 1000);
-    });
-  }
-}
-
-// ==========================================
-// 3. Diff Page Controller
-// ==========================================
-function initDiffPage() {
-  const state = getStoredState();
-  const file = getSelectedFileForDiff();
-
-  const repoDisplay = document.getElementById('repo-display');
-  const diffCard = document.getElementById('diff-card');
-  const diffEmpty = document.getElementById('diff-empty-state');
-  const fileTitle = document.getElementById('file-title');
-  const diffViewer = document.getElementById('diff-viewer');
-  const copyBtn = document.getElementById('copy-btn');
-  const downloadBtn = document.getElementById('download-btn');
-
-  if (!state || !file) {
-    diffEmpty.style.display = 'block';
-    if (repoDisplay) repoDisplay.textContent = 'No repository loaded';
-    return;
+  function updateFreeCounter(count) {
+    if (keyStatusText.textContent.includes('Set ✓')) {
+      statusMessage.innerHTML = `<span class="pulse-indicator"></span> Custom API Key Active — Unlimited requests available`;
+      return;
+    }
+    statusMessage.innerHTML = `<span class="pulse-indicator"></span> ${count} free docs available today — no key needed`;
+    if (count <= 0) {
+      generateBtn.disabled = true;
+      generateBtn.textContent = 'Free Tier Limit Reached';
+    }
   }
 
-  // Update repository header and card title
-  repoDisplay.textContent = `${state.repo.owner}/${state.repo.repo} [${state.repo.defaultBranch}]`;
-  fileTitle.textContent = `${file.path} (Original vs Documented)`;
-  diffCard.style.display = 'flex';
-
-  // Compute and Render Diff
-  const diffs = computeDiff(file.originalContent, file.documentedContent);
-  renderDiff(diffs);
-
-  // Copy button
+  // ==========================================
+  // 4. Clipboard Copy
+  // ==========================================
   copyBtn.addEventListener('click', () => {
-    navigator.clipboard.writeText(file.documentedContent)
+    navigator.clipboard.writeText(afterCode.textContent)
       .then(() => {
-        const originalText = copyBtn.textContent;
         copyBtn.textContent = 'Copied!';
-        copyBtn.style.backgroundColor = 'var(--color-success)';
-        setTimeout(() => {
-          copyBtn.textContent = originalText;
-          copyBtn.style.backgroundColor = '';
-        }, 1500);
+        setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
       })
       .catch(err => {
-        console.error('Failed to copy text: ', err);
+        console.error('Copy failed: ', err);
       });
   });
 
-  // Download button
-  downloadBtn.addEventListener('click', () => {
-    const blob = new Blob([file.documentedContent], { type: 'text/javascript' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    // Extract filename from path
-    const parts = file.path.split('/');
-    a.download = parts[parts.length - 1];
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+  // ==========================================
+  // 5. API Key Modal Controls
+  // ==========================================
+  keyIndicatorBtn.addEventListener('click', () => {
+    // Populate modal inputs from memory
+    const provider = modalProviderSelect.value;
+    modalKeyInput.value = customApiKeys[provider] || '';
+    keyModal.style.display = 'flex';
   });
 
-  /**
-   * Appends diff rows to the DOM.
-   * @param {import('./js/diff-engine.js').DiffLine[]} diffs 
-   */
-  function renderDiff(diffs) {
-    diffViewer.innerHTML = '';
+  modalProviderSelect.addEventListener('change', () => {
+    const provider = modalProviderSelect.value;
+    modalKeyInput.value = customApiKeys[provider] || '';
+  });
 
-    diffs.forEach(line => {
-      const lineEl = document.createElement('div');
-      lineEl.className = 'diff-line';
-      if (line.type === 'added') lineEl.classList.add('diff-added');
-      if (line.type === 'removed') lineEl.classList.add('diff-removed');
+  modalCancelBtn.addEventListener('click', () => {
+    keyModal.style.display = 'none';
+  });
 
-      const numEl = document.createElement('span');
-      numEl.className = 'diff-line-number';
-      numEl.textContent = line.lineNum || '';
+  modalSaveBtn.addEventListener('click', () => {
+    const provider = modalProviderSelect.value;
+    const key = modalKeyInput.value.trim();
+    
+    customApiKeys[provider] = key;
+    keyModal.style.display = 'none';
 
-      const codeEl = document.createElement('span');
-      codeEl.className = 'diff-line-content';
-      
-      // Prefix indicator
-      let prefix = ' ';
-      if (line.type === 'added') prefix = '+ ';
-      if (line.type === 'removed') prefix = '- ';
-      codeEl.textContent = prefix + line.content;
+    // Verify if any key is set
+    const anyKeySet = Object.values(customApiKeys).some(k => k.length > 0);
+    if (anyKeySet) {
+      keyStatusText.textContent = 'API Key: Set ✓';
+      keyIndicatorBtn.style.borderColor = 'var(--color-success)';
+      keyIndicatorBtn.style.color = 'var(--color-success)';
+    } else {
+      keyStatusText.textContent = 'API Key: No key set';
+      keyIndicatorBtn.style.borderColor = '';
+      keyIndicatorBtn.style.color = '';
+    }
+    updateFreeCounter(freeDocsRemaining);
+  });
 
-      lineEl.appendChild(numEl);
-      lineEl.appendChild(codeEl);
-      diffViewer.appendChild(lineEl);
+  // ==========================================
+  // 6. History Logs
+  // ==========================================
+  historyToggleBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    historyDropdown.style.display = historyDropdown.style.display === 'none' ? 'block' : 'none';
+  });
+
+  document.addEventListener('click', () => {
+    historyDropdown.style.display = 'none';
+  });
+
+  historyDropdown.addEventListener('click', (e) => {
+    e.stopPropagation(); // Avoid closing dropdown when clicking inside it
+  });
+
+  function saveToHistory(item) {
+    let list = [];
+    try {
+      list = JSON.parse(sessionStorage.getItem('autodoc_history') || '[]');
+    } catch (e) {
+      // Empty fallback
+    }
+
+    // Keep unique filenames on top
+    list = list.filter(x => x.filename !== item.filename);
+    list.unshift(item);
+
+    // Caps history items at 5 logs
+    if (list.length > 5) list.pop();
+
+    sessionStorage.setItem('autodoc_history', JSON.stringify(list));
+    renderHistory();
+  }
+
+  function renderHistory() {
+    let list = [];
+    try {
+      list = JSON.parse(sessionStorage.getItem('autodoc_history') || '[]');
+    } catch (e) {
+      // Empty fallback
+    }
+
+    historyBadge.textContent = list.length;
+
+    if (list.length === 0) {
+      historyList.innerHTML = `<li class="dropdown-empty">No history items yet</li>`;
+      return;
+    }
+
+    historyList.innerHTML = '';
+    list.forEach((item, index) => {
+      const li = document.createElement('li');
+      li.textContent = item.filename;
+      li.addEventListener('click', () => {
+        // Load history item details
+        currentFilename = item.filename;
+        leftFilename.textContent = item.filename;
+        rightFilename.textContent = `documented_${item.filename}`;
+        
+        languageSelect.value = item.language;
+        formatSelect.value = item.format;
+        modelSelect.value = item.model;
+        
+        beforeTextarea.value = item.originalContent;
+        updateCharCounter();
+        
+        afterEmpty.style.display = 'none';
+        afterCode.textContent = item.documentedContent;
+        afterCode.style.display = 'block';
+        documentedBadge.style.display = 'inline-block';
+        copyBtn.style.display = 'inline-block';
+        
+        statusMessage.textContent = `Loaded from history: ${item.filename}`;
+        historyDropdown.style.display = 'none';
+      });
+      historyList.appendChild(li);
     });
   }
-}
+});

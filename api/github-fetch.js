@@ -16,7 +16,6 @@ import {
  * @param {import('@vercel/node').VercelResponse} res
  */
 export default async function handler(req, res) {
-  // Only allow POST requests
   if (req.method !== 'POST') {
     res.setHeader('Allow', ['POST']);
     return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
@@ -29,17 +28,40 @@ export default async function handler(req, res) {
   }
 
   try {
-    // 1. Parse GitHub URL
+    // 1. Detect and handle single file blob URLs
+    // Example: https://github.com/owner/repo/blob/main/subdir/file.js
+    const blobRegex = /^(?:https?:\/\/)?(?:www\.)?github\.com\/([^\/]+)\/([^\/]+)\/blob\/([^\/]+)\/(.+)$/;
+    const blobMatch = repoUrl.trim().match(blobRegex);
+
+    if (blobMatch) {
+      const [_, owner, repo, branch, path] = blobMatch;
+      try {
+        const content = await fetchFileContent(owner, repo, branch, path, githubToken);
+        return res.status(200).json({
+          isSingleFile: true,
+          owner,
+          repo,
+          branch,
+          path,
+          size: content.length,
+          content
+        });
+      } catch (error) {
+        return res.status(404).json({
+          error: `Failed to fetch file content for ${path} on branch ${branch} from ${owner}/${repo}`
+        });
+      }
+    }
+
+    // 2. Otherwise parse as standard repository URL
     const { owner, repo } = parseGitHubUrl(repoUrl);
 
-    // 2. Fetch repository metadata (specifically default branch)
     let defaultBranch = 'main';
     try {
       const details = await fetchRepoDetails(owner, repo, githubToken);
       defaultBranch = details.defaultBranch || 'main';
     } catch (error) {
       console.warn('Could not dynamically fetch repository details, using "main" as initial default branch:', error.message);
-      // If rate limited or private repo check fails here, pass error unless it is a generic failure
       if (error instanceof RateLimitError) {
         return res.status(403).json({
           error: 'GitHub API rate limit reached, try again later or add a personal access token (githubToken)'
@@ -50,13 +72,11 @@ export default async function handler(req, res) {
       }
     }
 
-    // 3. Fetch file tree with fallback support
     let tree;
     let activeBranch = defaultBranch;
     try {
       tree = await fetchFileTree(owner, repo, activeBranch, githubToken);
     } catch (error) {
-      // If we tried detected default branch (or main) and got 404, try master as fallback
       if (error instanceof GitHubAPIError && error.status === 404 && activeBranch !== 'master') {
         activeBranch = 'master';
         try {
@@ -72,13 +92,10 @@ export default async function handler(req, res) {
       }
     }
 
-    // 4. Filter tree to allowed code files
     const filteredFiles = tree.filter(item => 
       item.type === 'blob' && isAllowedCodeFile(item.path, item.size || 0)
     );
 
-    // TODO: support pagination or fetch limits in the future if repo has too many files
-    // 5. Fetch content of each filtered file
     const files = await Promise.all(
       filteredFiles.map(async (file) => {
         try {
@@ -99,8 +116,8 @@ export default async function handler(req, res) {
       })
     );
 
-    // 6. Return response payload
     return res.status(200).json({
+      isSingleFile: false,
       owner,
       repo,
       defaultBranch: activeBranch,
