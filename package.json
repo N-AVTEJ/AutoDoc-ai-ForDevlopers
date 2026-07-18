@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "AI-powered documentation generator with doc-drift detection",
   "main": "api/generate.js",
+  "type": "module",
   "scripts": {
     "dev": "vercel dev"
   },
