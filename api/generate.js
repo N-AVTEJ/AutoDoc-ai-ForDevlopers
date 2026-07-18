@@ -1,12 +1,12 @@
-import { generateCompletion } from '../lib/providers.js';
+import { buildDocPrompt } from '../lib/prompts.js';
+import { callGemini, callOpenAI, callAnthropic } from '../lib/providers.js';
 
-// In-memory counter mapping IP/Session to remaining free requests
-const freeUsageLimits = new Map();
-const MAX_FREE_USES = 3;
+const MAX_CHAR_LIMIT = 50000;
+const SUPPORTED_PROVIDERS = new Set(['gemini', 'openai', 'anthropic']);
 
 /**
  * Serverless function to generate documentation using AI.
- * Accepts POST requests with `{ code, language, outputFormat, model, customApiKey }`.
+ * Accepts POST requests with `{ code, language, outputFormat, model, provider, userApiKey }`.
  * 
  * @param {import('@vercel/node').VercelRequest} req
  * @param {import('@vercel/node').VercelResponse} res
@@ -14,88 +14,118 @@ const MAX_FREE_USES = 3;
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', ['POST']);
-    return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
+    return res.status(405).json({ success: false, error: `Method ${req.method} Not Allowed` });
   }
 
-  const { code, language, outputFormat, model, customApiKey } = req.body || {};
+  // CRITICAL TRUST & SECURITY REQUIREMENT:
+  // Do NOT console.log the req.body or any variables containing custom keys.
+  const { code, language, outputFormat, model, provider, userApiKey } = req.body || {};
 
-  if (!code) {
-    return res.status(400).json({ error: 'Code content is required' });
+  // 1. Input Validation
+  if (!code || typeof code !== 'string') {
+    return res.status(400).json({ success: false, error: 'Code content must be a non-empty string.' });
   }
 
-  // 1. Resolve client IP or identifier to track limits
-  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'anonymous';
-  
-  // 2. Fetch or initialize free limit tracking
-  if (!freeUsageLimits.has(ip)) {
-    freeUsageLimits.set(ip, MAX_FREE_USES);
-  }
-  let remainingFree = freeUsageLimits.get(ip);
-
-  // 3. Select API Key & Provider
-  let apiKey = customApiKey || process.env.GEMINI_API_KEY;
-  let provider = 'gemini';
-
-  const lowerModel = (model || '').toLowerCase();
-  if (lowerModel.includes('gpt') || lowerModel.includes('openai')) {
-    provider = 'openai';
-  } else if (lowerModel.includes('claude') || lowerModel.includes('anthropic')) {
-    provider = 'anthropic';
+  if (code.length > MAX_CHAR_LIMIT) {
+    return res.status(400).json({ 
+      success: false, 
+      error: `Code length exceeds the limit of ${MAX_CHAR_LIMIT.toLocaleString()} characters.` 
+    });
   }
 
-  // If calling the free tier (no custom key provided)
-  if (!customApiKey) {
-    if (remainingFree <= 0) {
-      return res.status(403).json({
-        error: 'You have reached the free tier limit of 3 documents. Please set your own API key to continue.',
-        remainingFree: 0
-      });
+  if (!provider || !SUPPORTED_PROVIDERS.has(provider.toLowerCase())) {
+    return res.status(400).json({ 
+      success: false, 
+      error: `Unsupported provider "${provider}". Supported: gemini, openai, anthropic.` 
+    });
+  }
+
+  // 2. Free Tier Limit Checks (Stubbed for Phase 6 KV logic)
+  const hasFreeUsesRemaining = true; // TODO: Integrate real KV usage limits here
+  if (!userApiKey && !hasFreeUsesRemaining) {
+    return res.status(429).json({
+      success: false,
+      error: 'Free tier limits reached. Please configure your custom API Key to continue.'
+    });
+  }
+
+  // 3. Resolve API Key matching target provider
+  const resolvedProvider = provider.toLowerCase();
+  let apiKey = userApiKey;
+
+  if (!apiKey) {
+    // Resolve server-side key
+    if (resolvedProvider === 'gemini') {
+      apiKey = process.env.GEMINI_API_KEY;
+    } else if (resolvedProvider === 'openai') {
+      apiKey = process.env.OPENAI_API_KEY;
+    } else if (resolvedProvider === 'anthropic') {
+      apiKey = process.env.ANTHROPIC_API_KEY;
     }
+  }
 
-    // Decrement count
-    remainingFree--;
-    freeUsageLimits.set(ip, remainingFree);
-
-    // Ensure we have a server-side key for the default provider
-    if (!apiKey) {
-      return res.status(500).json({
-        error: 'Free tier API key is missing on the server. Please click the "API Key" button at the top right and set your own key.',
-        remainingFree: remainingFree + 1 // Refund
-      });
-    }
+  if (!apiKey) {
+    return res.status(401).json({
+      success: false,
+      error: `API key for provider "${provider}" is not configured on the server. Please add your own API Key.`
+    });
   }
 
   // 4. Construct Prompt
-  const prompt = `You are an expert developer. Please document the following code in the specified language and format, and perform a bug analysis.
-Language: ${language || 'Auto-detect'}
-Format: ${outputFormat || 'Docstring/JSDoc'}
+  const prompt = buildDocPrompt({ code, language, outputFormat });
 
-Rules:
-1. Generate clean, descriptive inline documentation (e.g. JSDoc comments or docstrings).
-2. Perform a code quality check and bug analysis. If you find bugs, security issues, or performance bottlenecks, write a summary of these bugs in a comment block at the very top of the file.
-3. Return ONLY the final documented code. Do NOT wrap the code in markdown code fences (such as \`\`\`) and do not include extra chat explanation text. The response must be a direct drop-in replacement of the original code file.
+  // 5. Dispatch API Call
+  let responseData;
+  const callParams = { apiKey, prompt, model };
 
-Original Code:
-${code}`;
+  switch (resolvedProvider) {
+    case 'gemini':
+      responseData = await callGemini(callParams);
+      break;
+    case 'openai':
+      responseData = await callOpenAI(callParams);
+      break;
+    case 'anthropic':
+      responseData = await callAnthropic(callParams);
+      break;
+  }
 
-  try {
-    // 5. Invoke selected provider
-    const documentedCode = await generateCompletion(prompt, provider, model || 'gemini-2.5-flash', apiKey);
-
-    return res.status(200).json({
-      documentedCode,
-      remainingFree: customApiKey ? null : remainingFree
-    });
-  } catch (error) {
-    console.error('LLM Generation failed:', error);
-    
-    // Refund free limit count if it failed
-    if (!customApiKey) {
-      freeUsageLimits.set(ip, remainingFree + 1);
+  if (!responseData.success) {
+    // Determine status code based on error keywords
+    let statusCode = 500;
+    const lowerError = (responseData.error || '').toLowerCase();
+    if (lowerError.includes('authentication') || lowerError.includes('401')) {
+      statusCode = 401;
+    } else if (lowerError.includes('rate limit') || lowerError.includes('429') || lowerError.includes('quota')) {
+      statusCode = 429;
+    } else if (lowerError.includes('bad request') || lowerError.includes('400')) {
+      statusCode = 400;
     }
 
-    return res.status(500).json({
-      error: `AI Generation failed: ${error.message}`
+    return res.status(statusCode).json({
+      success: false,
+      error: responseData.error || 'AI generation failed'
     });
   }
+
+  // 6. Defensive Code Fence Cleaning
+  let documentedCode = responseData.text || '';
+  // Match any markdown codeblock wraps (e.g. ```javascript ... ```) and extract only inner code
+  const codeBlockRegex = /^```[a-zA-Z0-9-]*\n([\s\S]*?)\n```$/;
+  const match = documentedCode.trim().match(codeBlockRegex);
+  if (match) {
+    documentedCode = match[1];
+  } else {
+    // Basic fallback to strip starting and trailing fences if mismatched
+    documentedCode = documentedCode
+      .replace(/^```[a-zA-Z0-9-]*\n/, '')
+      .replace(/\n```$/, '')
+      .trim();
+  }
+
+  // 7. Success Response
+  return res.status(200).json({
+    success: true,
+    documentedCode
+  });
 }
