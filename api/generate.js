@@ -1,12 +1,13 @@
 import { buildDocPrompt } from '../lib/prompts.js';
 import { callGemini, callOpenAI, callAnthropic } from '../lib/providers.js';
+import { getRemainingUses, incrementUsage, DAILY_FREE_LIMIT } from '../lib/kv.js';
 
 const MAX_CHAR_LIMIT = 50000;
 const SUPPORTED_PROVIDERS = new Set(['gemini', 'openai', 'anthropic']);
 
 /**
  * Serverless function to generate documentation using AI.
- * Accepts POST requests with `{ code, language, outputFormat, model, provider, userApiKey }`.
+ * Accepts POST requests with `{ code, language, outputFormat, model, provider, userApiKey, customApiKey }`.
  * 
  * @param {import('@vercel/node').VercelRequest} req
  * @param {import('@vercel/node').VercelResponse} res
@@ -19,7 +20,12 @@ export default async function handler(req, res) {
 
   // CRITICAL TRUST & SECURITY REQUIREMENT:
   // Do NOT console.log the req.body or any variables containing custom keys.
-  const { code, language, outputFormat, model, provider, userApiKey } = req.body || {};
+  const { code, language, outputFormat } = req.body || {};
+  
+  // Extract and normalize keys
+  const reqModel = req.body.model;
+  const reqProvider = req.body.provider;
+  const userApiKey = req.body.userApiKey || req.body.customApiKey;
 
   // 1. Input Validation
   if (!code || typeof code !== 'string') {
@@ -33,6 +39,53 @@ export default async function handler(req, res) {
     });
   }
 
+  const isFreeTier = !userApiKey;
+  let provider = reqProvider;
+  let model = reqModel;
+  let identifier = '';
+  let remainingFree = DAILY_FREE_LIMIT;
+
+  // Derive provider from model if provider is omitted (robust mapping for SPA client)
+  if (!provider && model) {
+    if (model.includes('openai') || model.includes('gpt')) {
+      provider = 'openai';
+    } else if (model.includes('anthropic') || model.includes('claude')) {
+      provider = 'anthropic';
+    } else {
+      provider = 'gemini';
+    }
+  }
+
+  // 2. Free Tier Limit Checks & Cost Safety Override
+  if (isFreeTier) {
+    // Derive unique client identifier (IP address)
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'anonymous';
+    identifier = ip.split(',')[0].trim();
+
+    try {
+      remainingFree = await getRemainingUses(identifier, DAILY_FREE_LIMIT);
+    } catch (err) {
+      console.error('[KV Error] Fetching free-tier remaining uses failed:', err);
+      // Fallback: deny request to prevent unlimited free use when KV is misconfigured/unreachable
+      return res.status(429).json({
+        success: false,
+        error: 'Usage limit check failed. Please configure your custom API Key to continue.'
+      });
+    }
+
+    if (remainingFree <= 0) {
+      return res.status(429).json({
+        success: false,
+        error: 'Free tier limit reached for today. Add your own API key to continue.'
+      });
+    }
+
+    // Cost safety override: Free tier requests are forced to the cheapest Gemini model
+    provider = 'gemini';
+    model = 'gemini';
+  }
+
+  // Ensure resolved provider is supported
   if (!provider || !SUPPORTED_PROVIDERS.has(provider.toLowerCase())) {
     return res.status(400).json({ 
       success: false, 
@@ -40,27 +93,17 @@ export default async function handler(req, res) {
     });
   }
 
-  // 2. Free Tier Limit Checks (Stubbed for Phase 6 KV logic)
-  const hasFreeUsesRemaining = true; // TODO: Integrate real KV usage limits here
-  if (!userApiKey && !hasFreeUsesRemaining) {
-    return res.status(429).json({
-      success: false,
-      error: 'Free tier limits reached. Please configure your custom API Key to continue.'
-    });
-  }
-
-  // 3. Resolve API Key matching target provider
   const resolvedProvider = provider.toLowerCase();
   let apiKey = userApiKey;
 
+  // 3. Resolve Server-Side Free-Tier API Key
   if (!apiKey) {
-    // Resolve server-side key
     if (resolvedProvider === 'gemini') {
-      apiKey = process.env.GEMINI_API_KEY;
+      apiKey = process.env.GEMINI_FREE_KEY || process.env.GEMINI_API_KEY;
     } else if (resolvedProvider === 'openai') {
-      apiKey = process.env.OPENAI_API_KEY;
+      apiKey = process.env.OPENAI_FREE_KEY || process.env.OPENAI_API_KEY;
     } else if (resolvedProvider === 'anthropic') {
-      apiKey = process.env.ANTHROPIC_API_KEY;
+      apiKey = process.env.ANTHROPIC_FREE_KEY || process.env.ANTHROPIC_API_KEY;
     }
   }
 
@@ -91,7 +134,6 @@ export default async function handler(req, res) {
   }
 
   if (!responseData.success) {
-    // Determine status code based on error keywords
     let statusCode = 500;
     const lowerError = (responseData.error || '').toLowerCase();
     if (lowerError.includes('authentication') || lowerError.includes('401')) {
@@ -108,24 +150,38 @@ export default async function handler(req, res) {
     });
   }
 
-  // 6. Defensive Code Fence Cleaning
+  // 6. Increment Usage for Free Tier on Success
+  if (isFreeTier) {
+    try {
+      await incrementUsage(identifier);
+      remainingFree = Math.max(0, remainingFree - 1);
+    } catch (err) {
+      console.error('[KV Error] Failed to increment usage:', err);
+    }
+  }
+
+  // 7. Defensive Code Fence Cleaning
   let documentedCode = responseData.text || '';
-  // Match any markdown codeblock wraps (e.g. ```javascript ... ```) and extract only inner code
   const codeBlockRegex = /^```[a-zA-Z0-9-]*\n([\s\S]*?)\n```$/;
   const match = documentedCode.trim().match(codeBlockRegex);
   if (match) {
     documentedCode = match[1];
   } else {
-    // Basic fallback to strip starting and trailing fences if mismatched
     documentedCode = documentedCode
       .replace(/^```[a-zA-Z0-9-]*\n/, '')
       .replace(/\n```$/, '')
       .trim();
   }
 
-  // 7. Success Response
-  return res.status(200).json({
+  // 8. Success Response
+  const result = {
     success: true,
     documentedCode
-  });
+  };
+
+  if (isFreeTier) {
+    result.remainingFree = remainingFree;
+  }
+
+  return res.status(200).json(result);
 }

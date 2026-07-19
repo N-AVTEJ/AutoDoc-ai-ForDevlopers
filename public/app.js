@@ -49,7 +49,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Initialize UI
   updateCharCounter();
   renderHistory();
-  updateFreeCounter(freeDocsRemaining);
+  fetchUsage();
 
   // ==========================================
   // 1. Live Character Count
@@ -207,15 +207,54 @@ document.addEventListener('DOMContentLoaded', () => {
     return 'gemini';
   }
 
+  async function fetchUsage() {
+    const anyKeySet = Object.values(customApiKeys).some(k => k.length > 0);
+    if (anyKeySet) {
+      updateFreeCounter(0);
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/usage');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.remaining !== undefined) {
+          freeDocsRemaining = data.remaining;
+          updateFreeCounter(freeDocsRemaining);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch daily free usage limits:', err);
+    }
+  }
+
   function updateFreeCounter(count) {
-    if (keyStatusText.textContent.includes('Set ✓')) {
+    const anyKeySet = Object.values(customApiKeys).some(k => k.length > 0);
+    if (anyKeySet) {
       statusMessage.innerHTML = `<span class="pulse-indicator"></span> Custom API Key Active — Unlimited requests available`;
+      generateBtn.disabled = false;
+      if (generateBtn.textContent === 'Free Tier Limit Reached') {
+        generateBtn.innerHTML = `
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+          </svg>
+          Generate Docs + Analyse`;
+      }
       return;
     }
     statusMessage.innerHTML = `<span class="pulse-indicator"></span> ${count} free docs available today — no key needed`;
     if (count <= 0) {
       generateBtn.disabled = true;
       generateBtn.textContent = 'Free Tier Limit Reached';
+    } else {
+      generateBtn.disabled = false;
+      if (generateBtn.textContent === 'Free Tier Limit Reached') {
+        generateBtn.innerHTML = `
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+          </svg>
+          Generate Docs + Analyse`;
+      }
     }
   }
 
@@ -270,7 +309,11 @@ document.addEventListener('DOMContentLoaded', () => {
       keyIndicatorBtn.style.borderColor = '';
       keyIndicatorBtn.style.color = '';
     }
-    updateFreeCounter(freeDocsRemaining);
+    if (anyKeySet) {
+      updateFreeCounter(0);
+    } else {
+      fetchUsage();
+    }
   });
 
   // ==========================================
